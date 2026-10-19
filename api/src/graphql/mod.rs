@@ -25,7 +25,15 @@ impl Asset {
     async fn id(&self) -> &str {
         &self.id
     }
+    /// Asset labels can be supplied by a catalogue subgraph.  It is marked
+    /// external here and consumed by `display_name`, making this a valid
+    /// Federation v2 extension rather than an unused `@external` field.
+    #[graphql(external)]
     async fn name(&self) -> &str {
+        &self.name
+    }
+    #[graphql(requires = "name")]
+    async fn display_name(&self) -> &str {
         &self.name
     }
     async fn tvl(&self) -> f64 {
@@ -204,6 +212,7 @@ mod federation_tests {
         assert!(sdl.contains("type Asset @key(fields: \"id\")"));
         assert!(sdl.contains("type Holder @key(fields: \"address\")"));
         assert!(sdl.contains("@shareable"));
+        assert!(sdl.contains("@external"));
         let response = schema.execute(r#"{ _entities(representations: [{__typename: "Asset", id: "A-1"}]) { ... on Asset { id } } }"#).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }

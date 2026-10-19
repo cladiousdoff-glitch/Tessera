@@ -53,6 +53,11 @@ impl<T: Clone> Resequencer<T> {
     /// downstream projection can rewind and replay it atomically.
     pub fn rewind<I>(&mut self, from_ledger: u32, replacement: I) -> Vec<SequencedEvent<T>>
     where I: IntoIterator<Item = SequencedEvent<T>> {
+        // A deeper rollback cannot be made correct with this intentionally
+        // bounded buffer; callers must replay it from durable storage.
+        if from_ledger.saturating_add(REORG_DEPTH) < self.highest_ledger {
+            return Vec::new();
+        }
         let lower = EventPosition { ledger_seq: from_ledger, tx_index: 0, event_index: 0 };
         let old: Vec<_> = self.delivered.range(lower..).map(|(&position, value)| SequencedEvent { position, value: value.clone() }).collect();
         self.delivered.retain(|position, _| position.ledger_seq < from_ledger);
@@ -78,10 +83,14 @@ impl<T: Clone> Resequencer<T> {
     fn flush_stable(&mut self) -> Vec<SequencedEvent<T>> {
         let safe_through = self.highest_ledger.saturating_sub(REORG_DEPTH);
         let keys: Vec<_> = self.pending.range(..=EventPosition { ledger_seq: safe_through, tx_index: u32::MAX, event_index: u32::MAX }).map(|(&key, _)| key).collect();
-        keys.into_iter().filter_map(|position| self.pending.remove(&position).map(|value| {
+        let emitted: Vec<_> = keys.into_iter().filter_map(|position| self.pending.remove(&position).map(|value| {
             self.delivered.insert(position, value.clone());
             SequencedEvent { position, value }
-        })).collect()
+        })).collect();
+        // Keep exactly the recovery horizon, not an unbounded event history.
+        let retain_from = self.highest_ledger.saturating_sub(REORG_DEPTH);
+        self.delivered.retain(|position, _| position.ledger_seq >= retain_from);
+        emitted
     }
 }
 
